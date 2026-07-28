@@ -8,6 +8,7 @@ from .config import get_settings
 from .db import SessionLocal
 from .models import Document, JobStatus, ProcessingJob, ProviderConfiguration
 from .pdf_processor import analyze_pdf, translate_document
+from .quality import completion_report
 
 dramatiq.set_broker(RedisBroker(url=get_settings().redis_url))
 
@@ -25,7 +26,7 @@ def _progress(session, job: ProcessingJob, stage: str, current: int, total: int,
 
 def _finish(session, job: ProcessingJob, status: str = JobStatus.complete.value) -> None:
     job.status = status
-    job.current_stage = "complete"
+    job.current_stage = "failed" if status == JobStatus.failed.value else "complete"
     job.progress_percent = 100
     job.completed_at = datetime.now(timezone.utc)
     session.commit()
@@ -87,7 +88,15 @@ def translation_job(job_id: str, provider_id: str, source: str, target: str, ton
                 lambda *args: _progress(session, job, *args),
                 lambda: bool(session.get(ProcessingJob, job.id).cancel_requested),
             ))
-            failed = any(element.translation_status == "failed" for page in document.pages for element in page.elements)
-            _finish(session, job, JobStatus.complete_with_warnings.value if failed else JobStatus.complete.value)
+            report = completion_report(session, document.id)
+            document.status = report["completion_status"]
+            session.commit()
+            if report["completion_status"] == "complete":
+                job_status = JobStatus.complete.value
+            elif report["completion_status"] == "failed":
+                job_status = JobStatus.failed.value
+            else:
+                job_status = JobStatus.complete_with_warnings.value
+            _finish(session, job, job_status)
         except BaseException as exc:
             _fail(session, job, exc)

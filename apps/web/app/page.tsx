@@ -3,19 +3,27 @@
 import { Settings } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Brand } from "@/components/Brand";
 import { ProgressCard } from "@/components/ProgressCard";
 import { UploadDropzone } from "@/components/UploadDropzone";
-import { api } from "@/lib/api";
+import { api, getAdminToken, setAdminToken } from "@/lib/api";
 
 export default function Home() {
   const router = useRouter();
   const [uploadPercent, setUploadPercent] = useState<number>();
   const [error, setError] = useState("");
+  const [token, setToken] = useState("");
+
+  useEffect(() => setToken(getAdminToken()), []);
 
   const upload = async (file: File) => {
     setError("");
+    if (!token.trim()) {
+      setError("Enter the administrator token before uploading a document.");
+      return;
+    }
+    setAdminToken(token.trim());
     setUploadPercent(0);
     try {
       const result = await api.upload(file, setUploadPercent);
@@ -29,7 +37,20 @@ export default function Home() {
 
   return (
     <main className="landing-shell">
-      <nav><Brand /><Link className="nav-link" href="/settings"><Settings size={17} /> Settings</Link></nav>
+      <nav>
+        <Brand />
+        <div className="nav-actions">
+          <label className="token-field">
+            Administrator token
+            <input
+              type="password"
+              value={token}
+              onChange={(event) => { setToken(event.target.value); setAdminToken(event.target.value.trim()); }}
+            />
+          </label>
+          <Link className="nav-link" href="/settings"><Settings size={17} /> Settings</Link>
+        </div>
+      </nav>
       <section className="landing-content">
         {uploadPercent === undefined ? <UploadDropzone onFile={upload} /> : <ProgressCard uploadPercent={uploadPercent} />}
         {error && <div className="error-banner">{error}</div>}

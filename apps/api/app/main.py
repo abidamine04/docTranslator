@@ -3,10 +3,10 @@ import json
 import shutil
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select, text
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
 from .config import get_settings
@@ -19,12 +19,12 @@ from .models import (
     Page,
     ProcessingJob,
     ProviderConfiguration,
-    ReviewIssue,
 )
 from .pdf_processor import export_pdf
 from .providers import TranslationProvider
+from .quality import completion_report
 from .schemas import ElementPatch, ProviderTest, ProviderWrite, TranslateRequest
-from .security import encrypt_secret, require_admin
+from .security import admin_token_error, encrypt_secret, require_admin
 from .storage import document_dir, save_pdf
 from .worker import analyze_job, translation_job
 
@@ -37,6 +37,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def authorize_api(request: Request, call_next):
+    if request.url.path.startswith("/api/") and request.method != "OPTIONS":
+        if error := admin_token_error(request.headers.get("X-Admin-Token", "")):
+            return JSONResponse(status_code=error[0], content={"detail": error[1]})
+    return await call_next(request)
 
 @app.on_event("startup")
 def startup() -> None:
@@ -275,33 +281,7 @@ async def job_events(job_id: str) -> StreamingResponse:
 
 
 def quality_report(db: Session, document_id: str) -> dict:
-    rows = db.execute(
-        select(DocumentElement.translation_status, func.count(DocumentElement.id))
-        .join(Page)
-        .where(Page.document_id == document_id)
-        .group_by(DocumentElement.translation_status)
-    ).all()
-    counts = dict(rows)
-    detected = sum(counts.values())
-    translated = sum(counts.get(key, 0) for key in ["translated", "unchanged", "manually_edited", "reviewed"])
-    failed = counts.get("failed", 0)
-    low = counts.get("low_confidence", 0)
-    overflows = db.scalar(select(func.count(ReviewIssue.id)).where(
-        ReviewIssue.document_id == document_id,
-        ReviewIssue.issue_type == "layout_overflow",
-        ReviewIssue.resolved.is_(False),
-    )) or 0
-    untranslated = max(detected - translated - failed, 0)
-    return {
-        "text_detected": detected,
-        "successfully_translated": translated,
-        "failed": failed,
-        "untranslated": untranslated,
-        "low_confidence": low,
-        "overflow_warnings": overflows,
-        "translation_coverage": round(translated / detected * 100, 1) if detected else 0,
-        "fully_translated": detected > 0 and failed == 0 and untranslated == 0 and overflows == 0,
-    }
+    return completion_report(db, document_id)
 
 
 @app.post("/api/documents/{document_id}/export", status_code=201)
@@ -320,7 +300,12 @@ def create_export(document_id: str, db: Session = Depends(get_db)) -> dict:
     try:
         rendered, overflow = export_pdf(db, document, destination)
         export.path = str(destination)
-        export.status = "complete_with_warnings" if overflow else "complete"
+        report = completion_report(db, document.id)
+        export.status = (
+            "complete"
+            if report["completion_status"] == "complete" and overflow == 0
+            else "complete_with_warnings"
+        )
         db.commit()
         return {"id": export.id, "status": export.status, "rendered_blocks": rendered, "overflow_warnings": overflow}
     except Exception as exc:

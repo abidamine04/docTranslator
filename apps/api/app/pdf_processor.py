@@ -52,6 +52,7 @@ def analyze_pdf(session: Session, document: Document, progress) -> None:
                     original_text=text,
                     confidence=1.0,
                     translation_status=ElementStatus.detected.value,
+                    metadata_json={"extraction_method": "native"},
                     style_json={
                         "font_family": first.get("font"),
                         "font_size": first.get("size", 11),
@@ -121,65 +122,106 @@ async def translate_document(
                     element.translated_text = result[0]
                     element.source_language = source
                     element.target_language = target
-                    element.translation_status = ElementStatus.translated.value
+                    element.translation_status = (
+                        ElementStatus.unchanged.value
+                        if result[0].strip() == element.original_text.strip()
+                        else ElementStatus.translated.value
+                    )
                 except Exception as exc:
                     element.translation_status = ElementStatus.failed.value
                     element.metadata_json = {**element.metadata_json, "translation_error": str(exc)}
         session.commit()
         done = min(start + len(batch), total)
         progress("translating", done, total, 15 + done / max(total, 1) * 70)
-    document.status = "translated"
+    document.status = "translation_processed"
     session.commit()
+
+
+def _fitting_font_size(page, rect: fitz.Rect, text: str, original_size: float) -> float | None:
+    """Return a fitting font size without mutating the page."""
+    font_size = original_size
+    minimum = max(6, original_size * 0.65)
+    while font_size >= minimum:
+        shape = page.new_shape()
+        if shape.insert_textbox(rect, text, fontsize=font_size, fontname="helv") >= 0:
+            return font_size
+        font_size -= 0.5
+    return None
 
 
 def export_pdf(session: Session, document: Document, destination: Path) -> tuple[int, int]:
     pdf = fitz.open(document.source_path)
-    elements = list(session.scalars(
-        select(DocumentElement).join(Page).where(Page.document_id == document.id)
-    ))
-    pages_by_id = {page.id: page for page in document.pages}
-    overflow = 0
-    rendered = 0
-    for element in elements:
-        if not element.translated_text or element.translation_status == ElementStatus.failed.value:
-            continue
-        page_model = pages_by_id[element.page_id]
-        page = pdf[page_model.page_index]
-        box = element.bounding_box
-        rect = fitz.Rect(box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"])
-        page.add_redact_annot(rect, fill=(1, 1, 1))
-    for page in pdf:
-        page.apply_redactions()
-    for element in elements:
-        if not element.translated_text or element.translation_status == ElementStatus.failed.value:
-            continue
-        page_model = pages_by_id[element.page_id]
-        page = pdf[page_model.page_index]
-        box = element.bounding_box
-        rect = fitz.Rect(box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"])
-        original_size = float(element.style_json.get("font_size", 11))
-        font_size = original_size
-        inserted = -1.0
-        while font_size >= max(6, original_size * 0.65):
-            inserted = page.insert_textbox(rect, element.translated_text, fontsize=font_size, fontname="helv")
-            if inserted >= 0:
-                break
-            font_size -= 0.5
-        if inserted < 0:
-            overflow += 1
-            session.add(ReviewIssue(
-                document_id=document.id,
-                element_id=element.id,
-                issue_type="layout_overflow",
-                message="Translated text does not fit its original bounding box.",
-            ))
-        else:
+    try:
+        elements = list(session.scalars(
+            select(DocumentElement).join(Page).where(Page.document_id == document.id)
+        ))
+        pages_by_id = {page.id: page for page in document.pages}
+        prepared: list[tuple[DocumentElement, fitz.Page, fitz.Rect, float]] = []
+        overflow = 0
+
+        # Never redact source content until replacement rendering has been proven to fit.
+        for element in elements:
+            if not element.translated_text or element.translation_status == ElementStatus.failed.value:
+                continue
+            page_model = pages_by_id[element.page_id]
+            page = pdf[page_model.page_index]
+            box = element.bounding_box
+            rect = fitz.Rect(box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"])
+            original_size = float(element.style_json.get("font_size", 11))
+            try:
+                font_size = _fitting_font_size(page, rect, element.translated_text, original_size)
+            except Exception:
+                font_size = None
+            if font_size is None:
+                overflow += 1
+                existing = session.scalar(select(ReviewIssue).where(
+                    ReviewIssue.document_id == document.id,
+                    ReviewIssue.element_id == element.id,
+                    ReviewIssue.issue_type == "layout_overflow",
+                    ReviewIssue.resolved.is_(False),
+                ))
+                if not existing:
+                    session.add(ReviewIssue(
+                        document_id=document.id,
+                        element_id=element.id,
+                        issue_type="layout_overflow",
+                        message="Translated text does not fit its original bounding box; source text was preserved.",
+                    ))
+                continue
+            prepared.append((element, page, rect, font_size))
+            for issue in session.scalars(select(ReviewIssue).where(
+                ReviewIssue.element_id == element.id,
+                ReviewIssue.issue_type == "layout_overflow",
+                ReviewIssue.resolved.is_(False),
+            )):
+                issue.resolved = True
+
+        for _, page, rect, _ in prepared:
+            page.add_redact_annot(rect, fill=(1, 1, 1))
+        for page in pdf:
+            page.apply_redactions()
+
+        rendered = 0
+        for element, page, rect, font_size in prepared:
+            shape = page.new_shape()
+            inserted = shape.insert_textbox(
+                rect,
+                element.translated_text,
+                fontsize=font_size,
+                fontname="helv",
+            )
+            if inserted < 0:
+                raise RuntimeError("Translation fit changed after preflight; export was aborted")
+            shape.commit(overlay=True)
             rendered += 1
-    session.commit()
-    metadata = {
-        **pdf.metadata,
-        "subject": f"Translated {document.source_language} to {document.target_language}",
-    }
-    pdf.set_metadata(metadata)
-    pdf.save(destination, garbage=4, deflate=True)
-    return rendered, overflow
+
+        session.commit()
+        metadata = {
+            **pdf.metadata,
+            "subject": f"Translated {document.source_language} to {document.target_language}",
+        }
+        pdf.set_metadata(metadata)
+        pdf.save(destination, garbage=4, deflate=True)
+        return rendered, overflow
+    finally:
+        pdf.close()

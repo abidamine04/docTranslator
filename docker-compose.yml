@@ -44,6 +44,13 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:mode=1777
     env_file:
       - path: .env
         required: false
@@ -62,6 +69,13 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:mode=1777
     command: dramatiq app.worker
     env_file:
       - path: .env
@@ -81,6 +95,14 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:mode=1777
+      - /app/.next/cache:uid=10001,gid=10001,mode=0750
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:

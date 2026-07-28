@@ -21,6 +21,7 @@ export default function Workspace() {
   const [elements, setElements] = useState<ElementRecord[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [job, setJob] = useState<Job>();
+  const [activeJobId, setActiveJobId] = useState<string>();
   const [target, setTarget] = useState("en");
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
@@ -41,21 +42,35 @@ export default function Workspace() {
   useEffect(() => { refresh().catch((error) => setMessage(error.message)); }, [refresh]);
 
   useEffect(() => {
-    const stored = sessionStorage.getItem(`job:${id}`);
-    if (!stored) return;
-    const stream = new EventSource(`${API_URL}/api/jobs/${stored}/events`);
-    stream.onmessage = (event) => {
-      const next = JSON.parse(event.data) as Job;
-      setJob(next);
-      if (["complete", "complete_with_warnings", "failed", "cancelled"].includes(next.status)) {
-        stream.close();
-        sessionStorage.removeItem(`job:${id}`);
-        refresh().catch(() => undefined);
+    setActiveJobId(sessionStorage.getItem(`job:${id}`) ?? undefined);
+  }, [id]);
+
+  useEffect(() => {
+    if (!activeJobId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const next = await api.job(activeJobId);
+        if (stopped) return;
+        setJob(next);
+        if (["complete", "complete_with_warnings", "failed", "cancelled"].includes(next.status)) {
+          sessionStorage.removeItem(`job:${id}`);
+          setActiveJobId(undefined);
+          await refresh();
+          return;
+        }
+        timer = setTimeout(poll, 750);
+      } catch (error) {
+        if (!stopped) setMessage(error instanceof Error ? error.message : "Job status could not be loaded");
       }
     };
-    return () => stream.close();
-  }, [id, refresh]);
-
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [activeJobId, id, refresh]);
   const startTranslation = async () => {
     setMessage("");
     try {
@@ -63,16 +78,7 @@ export default function Workspace() {
       const next = await api.translate(id, target, active?.id);
       setJob(next);
       sessionStorage.setItem(`job:${id}`, next.id);
-      const stream = new EventSource(`${API_URL}/api/jobs/${next.id}/events`);
-      stream.onmessage = async (event) => {
-        const update = JSON.parse(event.data) as Job;
-        setJob(update);
-        if (["complete", "complete_with_warnings", "failed", "cancelled"].includes(update.status)) {
-          stream.close();
-          sessionStorage.removeItem(`job:${id}`);
-          await refresh();
-        }
-      };
+      setActiveJobId(next.id);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Translation could not start");
     }
@@ -89,6 +95,22 @@ export default function Workspace() {
     }
   };
 
+  const downloadExport = async () => {
+    if (!exportId) return;
+    setMessage("Downloading export…");
+    try {
+      const blob = await api.downloadExport(exportId);
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = "translated.pdf";
+      link.click();
+      URL.revokeObjectURL(url);
+      setMessage("Download started.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Download failed");
+    }
+  };
   const selectBlock = (block: ElementRecord) => {
     setSelected(block);
     setDraft(block.translated_text ?? "");
@@ -135,9 +157,9 @@ export default function Workspace() {
         </div>
         <button className="icon-button" title="Search"><Search size={18} /></button>
         <Link href="/settings" className="icon-button" title="Settings"><Settings size={18} /></Link>
-        <button className="download-button" onClick={exportId ? undefined : createExport}>
+        <button className="download-button" onClick={exportId ? downloadExport : createExport}>
           <Download size={17} />
-          {exportId ? <a href={`${API_URL}/api/exports/${exportId}/download`}>Download</a> : "Export"}
+          {exportId ? "Download" : "Export"}
         </button>
       </header>
 

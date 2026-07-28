@@ -1,9 +1,30 @@
 import type { DocumentRecord, ElementRecord, Job, Provider } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const TOKEN_KEY = "doctranslator:admin-token";
+
+export function getAdminToken(): string {
+  return typeof window === "undefined" ? "" : sessionStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+export function setAdminToken(token: string): void {
+  if (typeof window === "undefined") return;
+  if (token) sessionStorage.setItem(TOKEN_KEY, token);
+  else sessionStorage.removeItem(TOKEN_KEY);
+}
+
+function authenticatedHeaders(initial?: HeadersInit): Headers {
+  const headers = new Headers(initial);
+  const token = getAdminToken();
+  if (token) headers.set("X-Admin-Token", token);
+  return headers;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, init);
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: authenticatedHeaders(init?.headers),
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
@@ -12,11 +33,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function download(path: string): Promise<Blob> {
+  const response = await fetch(`${API_URL}${path}`, { headers: authenticatedHeaders() });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(typeof body.detail === "string" ? body.detail : "Download failed");
+  }
+  return response.blob();
+}
+
 export const api = {
   upload: (file: File, onProgress: (percent: number) => void) =>
     new Promise<{ document: DocumentRecord; job: Job }>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${API_URL}/api/documents/upload`);
+      const token = getAdminToken();
+      if (token) xhr.setRequestHeader("X-Admin-Token", token);
       xhr.upload.onprogress = (event) => event.lengthComputable && onProgress((event.loaded / event.total) * 100);
       xhr.onerror = () => reject(new Error("Upload failed. Check the API connection."));
       xhr.onload = () => {
@@ -34,6 +66,7 @@ export const api = {
   document: (id: string) => request<DocumentRecord>(`/api/documents/${id}`, { cache: "no-store" }),
   elements: (id: string) => request<ElementRecord[]>(`/api/documents/${id}/elements`, { cache: "no-store" }),
   providers: () => request<Provider[]>("/api/providers", { cache: "no-store" }),
+  job: (id: string) => request<Job>(`/api/jobs/${id}`, { cache: "no-store" }),
   translate: (id: string, target_language: string, provider_id?: string) =>
     request<Job>(`/api/documents/${id}/translate`, {
       method: "POST",
@@ -49,6 +82,7 @@ export const api = {
     }),
   reviewElement: (id: string) => request(`/api/elements/${id}/review`, { method: "POST" }),
   export: (id: string) => request<{ id: string }>(`/api/documents/${id}/export`, { method: "POST" }),
+  downloadExport: (id: string) => download(`/api/exports/${id}/download`),
   saveProvider: (body: Record<string, unknown>, token: string, id?: string) =>
     request<Provider>(id ? `/api/providers/${id}` : "/api/providers", {
       method: id ? "PUT" : "POST",
@@ -62,4 +96,3 @@ export const api = {
       body: JSON.stringify({ provider_id: id }),
     }),
 };
-

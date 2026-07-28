@@ -27,8 +27,16 @@ def decrypt_secret(value: str | None) -> str | None:
         raise RuntimeError("Provider secret cannot be decrypted; verify the encryption key") from exc
 
 
-def require_admin(x_admin_token: str = Header(default="")) -> None:
+def admin_token_error(supplied: str) -> tuple[int, str] | None:
     expected = get_settings().admin_api_token
-    if expected and not hmac.compare_digest(x_admin_token, expected):
-        raise HTTPException(status_code=401, detail="A valid administrator token is required")
+    if not expected:
+        return 503, "ADMIN_API_TOKEN is not configured"
+    if not hmac.compare_digest(supplied, expected):
+        return 401, "A valid administrator token is required"
+    return None
+
+
+def require_admin(x_admin_token: str = Header(default="")) -> None:
+    if error := admin_token_error(x_admin_token):
+        raise HTTPException(status_code=error[0], detail=error[1])
 

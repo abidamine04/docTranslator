@@ -4,7 +4,7 @@ import { ArrowLeft, CheckCircle2, KeyRound, PlugZap, Save, ServerCog } from "luc
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Brand } from "@/components/Brand";
-import { api } from "@/lib/api";
+import { api, getAdminToken, setAdminToken } from "@/lib/api";
 import type { Provider } from "@/lib/types";
 
 const initial = {
@@ -32,7 +32,9 @@ export default function SettingsPage() {
 
   const load = () => api.providers().then(setProviders).catch((error) => setMessage(error.message));
   useEffect(() => {
-    void load();
+    const stored = getAdminToken();
+    setToken(stored);
+    if (stored) void load();
   }, []);
 
   const edit = (provider: Provider) => {
@@ -48,6 +50,7 @@ export default function SettingsPage() {
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
+    setAdminToken(token.trim());
     setMessage("Saving encrypted configuration…");
     try {
       await api.saveProvider(form, token, editing);
@@ -61,6 +64,7 @@ export default function SettingsPage() {
   };
 
   const test = async (id: string) => {
+    setAdminToken(token.trim());
     setMessage("Testing provider connection…");
     try {
       const result = await api.testProvider(id, token);
@@ -116,7 +120,7 @@ export default function SettingsPage() {
               <label>Temperature<input type="number" min="0" max="2" step="0.1" value={form.temperature} onChange={(e) => setForm({ ...form, temperature: Number(e.target.value) })} /></label>
               <label>Rate limit / minute<input type="number" min="1" value={form.rate_limit_per_minute} onChange={(e) => setForm({ ...form, rate_limit_per_minute: Number(e.target.value) })} /></label>
               <label className="wide">Custom system prompt<textarea value={form.custom_system_prompt} placeholder="Optional. The safe document-data boundary remains enforced." onChange={(e) => setForm({ ...form, custom_system_prompt: e.target.value })} /></label>
-              <label className="wide">Administrator token<input type="password" required value={token} onChange={(e) => setToken(e.target.value)} /></label>
+              <label className="wide">Administrator token<input type="password" required value={token} onChange={(e) => { setToken(e.target.value); setAdminToken(e.target.value.trim()); }} /></label>
               <label className="check"><input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} /> Use as active provider</label>
             </div>
             <button className="primary" type="submit"><Save size={17} /> Save provider</button>

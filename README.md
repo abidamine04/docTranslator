@@ -56,3 +56,19 @@ OCR, image inpainting, Office processors, authentication UI, distributed cancell
 and visual-regression fixtures are documented design targets and are not falsely
 reported as complete. See [Architecture](docs/architecture.md) and
 [Operations](docs/operations.md).
+
+## Open-source license
+
+Copyright (c) 2026 DocTranslator contributors.
+
+DocTranslator is open-source software licensed under the
+[GNU Affero General Public License v3.0](LICENSE). If you modify the software and
+make it available to users over a network, the AGPL requires that those users can
+obtain the corresponding source code for the version they are using.
+
+This license choice is also compatible with the open-source PyMuPDF/MuPDF build
+used by the API and worker. A distributor that does not want to operate under the
+AGPL must obtain an appropriate commercial PyMuPDF license and separately arrange
+a different license for DocTranslator from its copyright holders. Third-party
+components remain under their own licenses; see
+[Third-Party Notices](THIRD_PARTY_NOTICES.md).
