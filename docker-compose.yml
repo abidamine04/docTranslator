@@ -1,0 +1,94 @@
+name: doctranslator
+
+x-api-environment: &api-environment
+  APP_ENV: ${APP_ENV:-development}
+  APP_SECRET_KEY: ${APP_SECRET_KEY:-development-only-change-me}
+  ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://doctranslator:doctranslator@postgres:5432/doctranslator}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  STORAGE_ROOT: ${STORAGE_ROOT:-/data/documents}
+  FILE_RETENTION_DAYS: ${FILE_RETENTION_DAYS:-30}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
+  MAX_PAGE_COUNT: ${MAX_PAGE_COUNT:-500}
+  DEFAULT_TARGET_LANGUAGE: ${DEFAULT_TARGET_LANGUAGE:-en}
+  OCR_CONFIDENCE_THRESHOLD: ${OCR_CONFIDENCE_THRESHOLD:-0.80}
+  PROVIDER_SECRET_ENCRYPTION_KEY: ${PROVIDER_SECRET_ENCRYPTION_KEY:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: doctranslator
+      POSTGRES_USER: doctranslator
+      POSTGRES_PASSWORD: doctranslator
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doctranslator"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment: *api-environment
+    ports:
+      - "8000:8000"
+    volumes:
+      - document-data:/data/documents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: dramatiq app.worker
+    env_file:
+      - path: .env
+        required: false
+    environment: *api-environment
+    volumes:
+      - document-data:/data/documents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  redis-data:
+  document-data:

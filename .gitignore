@@ -1,0 +1,11 @@
+.env
+.next/
+node_modules/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+storage/
+postgres-data/
+redis-data/
+
