@@ -3,7 +3,7 @@
 ## Services
 
 - `web`: Next.js/React reader workspace. It uploads files, streams job events, edits
-  blocks, displays completion metrics, and manages provider settings.
+  blocks, displays completion metrics, and manages provider and application settings.
 - `api`: FastAPI boundary for documents, elements, exports, settings, and health.
 - `worker`: Dramatiq process. Jobs are idempotent and store stage/page progress.
 - `postgres`: durable metadata and audit-friendly block state.
@@ -30,6 +30,10 @@ adapters. Configuration is database-backed and API keys are encrypted with a key
 derived from `PROVIDER_SECRET_ENCRYPTION_KEY` or `APP_SECRET_KEY`. Document text is
 wrapped as data and the system prompt explicitly rejects instructions within it.
 
+The singleton `application_settings` row stores user-adjustable defaults, document
+limits, retention, storage root, OCR confidence, language-detection context, and
+the base translation prompt. Environment values seed this row only on first use.
+
 The provider cache key includes normalized text, language pair, and provider
 configuration fingerprint. Failed batches are retried per block.
 
@@ -46,4 +50,3 @@ Completion is derived from persisted elements, never inferred from job completio
 The API reports detected, translated, failed, untranslated, low-confidence, overflow,
 OCR coverage, and translation coverage. A document is `complete_with_warnings` when
 any unresolved region remains.
-

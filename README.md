@@ -6,9 +6,12 @@ contains the first usable milestone: native PDF upload, extraction, language
 detection, queued translation, side-by-side review, block editing, quality metrics,
 and searchable PDF export.
 
-No translation API is hardcoded. Provider URL, API key, model, timeout, retries,
-batch size, context size, temperature, rate limit, and system prompt are configured
-from **Settings** and stored server-side. Secrets are encrypted at rest.
+No translation API is hardcoded. Provider URL, endpoint paths, API key, model,
+timeout, retries, batch/context/output sizes, temperature, rate limit, custom
+headers, TLS behavior, and prompts are configured from **Settings** and stored
+server-side. General translation defaults, document limits, OCR threshold,
+retention, and storage root are database-backed there as well. Environment values
+for those fields are first-run seeds only. Secrets are encrypted at rest.
 
 ## Quick start
 
@@ -17,9 +20,11 @@ from **Settings** and stored server-side. Secrets are encrypted at rest.
 3. Run `docker compose up --build`.
 4. Open <http://localhost:3000>, then configure a provider in **Settings**.
 
-For Ollama, choose `OpenAI compatible`, use `http://host.docker.internal:11434/v1`,
-leave the API key blank, and enter an installed model such as `qwen2.5:7b`.
-For LibreTranslate, choose `LibreTranslate` and use its service URL.
+Enter the provider URL and model manually. Local OpenAI-compatible services may
+leave the API key blank. No provider, URL, or model is created automatically.
+
+Docker runs database migrations before starting the API. The complete hardcoded
+setting classification is in [Configuration audit](CONFIGURATION_AUDIT.md).
 
 The API documentation is available at <http://localhost:8000/docs>.
 

@@ -22,7 +22,7 @@ export default function Workspace() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [job, setJob] = useState<Job>();
   const [activeJobId, setActiveJobId] = useState<string>();
-  const [target, setTarget] = useState("en");
+  const [target, setTarget] = useState("");
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [scale, setScale] = useState(0.95);
@@ -33,10 +33,13 @@ export default function Workspace() {
   const [message, setMessage] = useState("");
 
   const refresh = useCallback(async () => {
-    const [doc, blocks, configured] = await Promise.all([api.document(id), api.elements(id), api.providers()]);
+    const [doc, blocks, configured, savedSettings] = await Promise.all([
+      api.document(id), api.elements(id), api.providers(), api.settings(),
+    ]);
     setDocument(doc);
     setElements(blocks);
     setProviders(configured);
+    setTarget((current) => current || savedSettings.default_target_language);
   }, [id]);
 
   useEffect(() => { refresh().catch((error) => setMessage(error.message)); }, [refresh]);

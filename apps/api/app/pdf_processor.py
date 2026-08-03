@@ -6,7 +6,7 @@ from langdetect import DetectorFactory, LangDetectException, detect
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .config import get_settings
+from .application_settings import get_application_settings
 from .models import Document, DocumentElement, ElementStatus, Page, ProviderConfiguration, ReviewIssue
 from .providers import TranslationProvider
 
@@ -14,11 +14,12 @@ DetectorFactory.seed = 0
 
 
 def analyze_pdf(session: Session, document: Document, progress) -> None:
+    app_settings = get_application_settings(session)
     pdf = fitz.open(document.source_path)
     if pdf.needs_pass:
         raise ValueError("Password-protected PDF")
-    if len(pdf) > get_settings().max_page_count:
-        raise ValueError(f"PDF exceeds the {get_settings().max_page_count} page limit")
+    if len(pdf) > app_settings.max_page_count:
+        raise ValueError(f"PDF exceeds the {app_settings.max_page_count} page limit")
     session.execute(delete(Page).where(Page.document_id == document.id))
     document.page_count = len(pdf)
     all_text: list[str] = []
@@ -69,7 +70,7 @@ def analyze_pdf(session: Session, document: Document, progress) -> None:
             ))
         session.commit()
     progress("detecting_source_language", len(pdf), len(pdf), 60)
-    sample = " ".join(all_text)[:10000]
+    sample = " ".join(all_text)[:app_settings.language_detection_sample_chars]
     try:
         document.source_language = detect(sample) if sample else "unknown"
     except LangDetectException:
@@ -88,7 +89,10 @@ async def translate_document(
     progress,
     cancelled,
 ) -> None:
+    app_settings = get_application_settings(session)
     provider = TranslationProvider(provider_config)
+    if hasattr(provider, "system_prompt"):
+        provider.system_prompt = app_settings.translation_system_prompt
     elements = list(
         session.scalars(
             select(DocumentElement)

@@ -1,4 +1,4 @@
-import type { DocumentRecord, ElementRecord, Job, Provider } from "./types";
+import type { ApplicationSettings, DocumentRecord, ElementRecord, Job, Provider } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "doctranslator:admin-token";
@@ -66,6 +66,13 @@ export const api = {
   document: (id: string) => request<DocumentRecord>(`/api/documents/${id}`, { cache: "no-store" }),
   elements: (id: string) => request<ElementRecord[]>(`/api/documents/${id}/elements`, { cache: "no-store" }),
   providers: () => request<Provider[]>("/api/providers", { cache: "no-store" }),
+  settings: () => request<ApplicationSettings>("/api/settings", { cache: "no-store" }),
+  saveSettings: (body: ApplicationSettings, token: string) =>
+    request<ApplicationSettings>("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+      body: JSON.stringify(body),
+    }),
   job: (id: string) => request<Job>(`/api/jobs/${id}`, { cache: "no-store" }),
   translate: (id: string, target_language: string, provider_id?: string) =>
     request<Job>(`/api/documents/${id}/translate`, {

@@ -113,7 +113,28 @@ class ProviderConfiguration(Base):
     temperature: Mapped[float] = mapped_column(Float, default=0.1)
     custom_system_prompt: Mapped[str | None] = mapped_column(Text)
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, default=60)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, default=4096)
+    chat_completions_path: Mapped[str] = mapped_column(String(200), default="/chat/completions")
+    models_path: Mapped[str] = mapped_column(String(200), default="/models")
+    translate_path: Mapped[str] = mapped_column(String(200), default="/translate")
+    custom_headers: Mapped[dict] = mapped_column(JSON, default=dict)
+    verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ApplicationSettings(Base):
+    __tablename__ = "application_settings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    default_target_language: Mapped[str] = mapped_column(String(24), default="en")
+    ocr_confidence_threshold: Mapped[float] = mapped_column(Float, default=0.8)
+    max_upload_mb: Mapped[int] = mapped_column(Integer, default=100)
+    max_page_count: Mapped[int] = mapped_column(Integer, default=500)
+    file_retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    default_translation_tone: Mapped[str] = mapped_column(String(50), default="neutral")
+    translation_system_prompt: Mapped[str] = mapped_column(Text)
+    storage_root: Mapped[str] = mapped_column(Text, default="./storage")
+    language_detection_sample_chars: Mapped[int] = mapped_column(Integer, default=10000)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class Export(Base):
@@ -136,4 +157,3 @@ class ReviewIssue(Base):
     severity: Mapped[str] = mapped_column(String(16), default="warning")
     message: Mapped[str] = mapped_column(Text)
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
-

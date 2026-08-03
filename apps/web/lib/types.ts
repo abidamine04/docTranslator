@@ -60,6 +60,23 @@ export type Provider = {
   temperature: number;
   custom_system_prompt?: string;
   rate_limit_per_minute: number;
+  max_output_tokens: number;
+  chat_completions_path: string;
+  models_path: string;
+  translate_path: string;
+  custom_headers: Record<string, string>;
+  verify_tls: boolean;
   is_active: boolean;
 };
 
+export type ApplicationSettings = {
+  default_target_language: string;
+  ocr_confidence_threshold: number;
+  max_upload_mb: number;
+  max_page_count: number;
+  file_retention_days: number;
+  default_translation_tone: string;
+  translation_system_prompt: string;
+  storage_root: string;
+  language_detection_sample_chars: number;
+};

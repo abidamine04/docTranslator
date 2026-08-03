@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from .config import get_settings
+from .application_settings import get_application_settings
 from .models import DocumentElement, Page, ReviewIssue
 
 SUCCESS_STATUSES = {"translated", "manually_edited", "reviewed"}
@@ -9,6 +9,7 @@ IMAGE_ISSUE_TYPES = {"unresolved_image", "unresolved_image_text", "image_text"}
 
 
 def completion_report(session: Session, document_id: str) -> dict:
+    app_settings = get_application_settings(session)
     pages = list(session.scalars(
         select(Page).options(selectinload(Page.elements)).where(Page.document_id == document_id)
     ))
@@ -28,7 +29,7 @@ def completion_report(session: Session, document_id: str) -> dict:
     pending = total - successful - failed - unchanged
     low_ocr = sum(
         element.translation_status == "low_confidence"
-        or element.confidence < get_settings().ocr_confidence_threshold
+        or element.confidence < app_settings.ocr_confidence_threshold
         for element in ocr_elements
     )
     scanned_pages = [page for page in pages if page.page_type == "scanned"]

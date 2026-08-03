@@ -9,8 +9,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
+from .application_settings import effective_storage_root, get_application_settings
 from .config import get_settings
-from .db import Base, engine, get_db
+from .db import Base, SessionLocal, engine, get_db
 from .models import (
     Document,
     DocumentElement,
@@ -23,7 +24,7 @@ from .models import (
 from .pdf_processor import export_pdf
 from .providers import TranslationProvider
 from .quality import completion_report
-from .schemas import ElementPatch, ProviderTest, ProviderWrite, TranslateRequest
+from .schemas import ApplicationSettingsWrite, ElementPatch, ProviderTest, ProviderWrite, TranslateRequest
 from .security import admin_token_error, encrypt_secret, require_admin
 from .storage import document_dir, save_pdf
 from .worker import analyze_job, translation_job
@@ -46,8 +47,9 @@ async def authorize_api(request: Request, call_next):
 
 @app.on_event("startup")
 def startup() -> None:
-    settings.storage_root.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    with SessionLocal() as session:
+        effective_storage_root(session).mkdir(parents=True, exist_ok=True)
 
 
 def document_view(document: Document) -> dict:
@@ -102,6 +104,8 @@ def ready(db: Session = Depends(get_db)) -> dict:
 
 @app.post("/api/documents/upload", status_code=201)
 async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)) -> dict:
+    app_settings = get_application_settings(db)
+    upload_root = effective_storage_root(db)
     document = Document(
         filename=Path(file.filename or "document.pdf").name,
         mime_type=file.content_type or "application/pdf",
@@ -111,7 +115,9 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
     db.add(document)
     db.flush()
     try:
-        path, size = await save_pdf(file, document.id)
+        path, size = await save_pdf(
+            file, document.id, app_settings.max_upload_mb, upload_root
+        )
         document.source_path = str(path)
         document.size_bytes = size
         job = ProcessingJob(document_id=document.id, current_stage="parsing_document")
@@ -121,7 +127,12 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
         return {"document": document_view(document), "job": job_view(job)}
     except Exception:
         db.rollback()
-        shutil.rmtree(document_dir(document.id), ignore_errors=True)
+        failed_path = (
+            Path(document.source_path).parent
+            if document.source_path
+            else document_dir(document.id, upload_root)
+        )
+        shutil.rmtree(failed_path, ignore_errors=True)
         raise
 
 
@@ -146,7 +157,7 @@ def delete_document(document_id: str, db: Session = Depends(get_db)) -> None:
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(404, "Document not found")
-    path = document_dir(document.id)
+    path = Path(document.source_path).parent
     db.delete(document)
     db.commit()
     shutil.rmtree(path, ignore_errors=True)
@@ -221,6 +232,7 @@ def review_element(element_id: str, db: Session = Depends(get_db)) -> dict:
 
 @app.post("/api/documents/{document_id}/translate", status_code=202)
 def translate(document_id: str, body: TranslateRequest, db: Session = Depends(get_db)) -> dict:
+    app_settings = get_application_settings(db)
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(404, "Document not found")
@@ -233,7 +245,9 @@ def translate(document_id: str, body: TranslateRequest, db: Session = Depends(ge
     job = ProcessingJob(document_id=document.id, current_stage="queued")
     db.add(job)
     db.commit()
-    translation_job.send(job.id, provider.id, source, body.target_language, body.tone)
+    target = body.target_language or app_settings.default_target_language
+    tone = body.tone or app_settings.default_translation_tone
+    translation_job.send(job.id, provider.id, source, target, tone)
     return job_view(job)
 
 
@@ -296,7 +310,7 @@ def create_export(document_id: str, db: Session = Depends(get_db)) -> dict:
     export = Export(document_id=document.id, export_type="translated_pdf", status="processing")
     db.add(export)
     db.flush()
-    destination = document_dir(document.id) / f"translated-{export.id}.pdf"
+    destination = Path(document.source_path).parent / f"translated-{export.id}.pdf"
     try:
         rendered, overflow = export_pdf(db, document, destination)
         export.path = str(destination)
@@ -338,6 +352,12 @@ def provider_view(provider: ProviderConfiguration) -> dict:
         "temperature": provider.temperature,
         "custom_system_prompt": provider.custom_system_prompt,
         "rate_limit_per_minute": provider.rate_limit_per_minute,
+        "max_output_tokens": provider.max_output_tokens,
+        "chat_completions_path": provider.chat_completions_path,
+        "models_path": provider.models_path,
+        "translate_path": provider.translate_path,
+        "custom_headers": provider.custom_headers,
+        "verify_tls": provider.verify_tls,
         "is_active": provider.is_active,
     }
 
@@ -380,10 +400,46 @@ async def test_provider(body: ProviderTest, db: Session = Depends(get_db)) -> di
     if not provider:
         raise HTTPException(404, "Provider not found")
     try:
-        output = await TranslationProvider(provider).translate(["Hello"], "en", "fr", "neutral")
+        prompt = get_application_settings(db).translation_system_prompt
+        output = await TranslationProvider(provider, prompt).translate(["Hello"], "en", "fr", "neutral")
         return {"ok": True, "sample": output[0]}
     except Exception as exc:
         raise HTTPException(502, f"Connection test failed: {exc}") from exc
+
+
+def application_settings_view(value) -> dict:
+    return {
+        "default_target_language": value.default_target_language,
+        "ocr_confidence_threshold": value.ocr_confidence_threshold,
+        "max_upload_mb": value.max_upload_mb,
+        "max_page_count": value.max_page_count,
+        "file_retention_days": value.file_retention_days,
+        "default_translation_tone": value.default_translation_tone,
+        "translation_system_prompt": value.translation_system_prompt,
+        "storage_root": value.storage_root,
+        "language_detection_sample_chars": value.language_detection_sample_chars,
+    }
+
+
+@app.get("/api/settings")
+def read_application_settings(db: Session = Depends(get_db)) -> dict:
+    return application_settings_view(get_application_settings(db))
+
+
+@app.put("/api/settings", dependencies=[Depends(require_admin)])
+def update_application_settings(
+    body: ApplicationSettingsWrite, db: Session = Depends(get_db)
+) -> dict:
+    value = get_application_settings(db)
+    for key, setting in body.model_dump().items():
+        setattr(value, key, setting)
+    root = Path(value.storage_root).expanduser().resolve()
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(422, f"Storage root is not writable: {exc}") from exc
+    db.commit()
+    return application_settings_view(value)
 
 
 @app.get("/api/languages")
